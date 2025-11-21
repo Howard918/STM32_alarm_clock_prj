@@ -21,7 +21,116 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#define UP_KEY  65
+#define DOWN_KEY 66
+#define RIGHT_KEY 67
+#define LEFT_KEY  68
+#define SEL_KEY  13
 
+#define LONG_CLICK_MIN 20
+#define LONG_CLICK_MAX 50
+#define LONG_CLICK_COUNT 30
+
+#define DOUBLE_CLICK_MIN 100
+#define DOUBLE_CLICK_MAX 200
+
+#define NORMAL_CLICK_MIN 500
+
+enum CLOCK_MODE{
+	NORMAL_STATE,
+	TIME_SETTING,
+	ALARM_TIME_SETTING,
+	MUSIC_SELECT
+};
+
+enum CLOCK_BUTTON{
+	NO_KEY,
+	UP,
+	DOWN,
+	RIGHT,
+	LEFT,
+	SEL
+};
+
+struct clock_state{
+	enum CLOCK_MODE mode;
+	enum CLOCK_BUTTON button;
+	int music_num;
+};
+
+struct clock_state current_state;
+
+typedef struct {
+  int8_t hours;
+  int8_t minutes;
+  int8_t seconds;
+}TimeTypeDef;
+
+TimeTypeDef ctime;  // current time
+TimeTypeDef stime; // setting time
+TimeTypeDef atime;  // alarm time
+
+typedef struct {
+  int8_t music_num;
+  char music_title[16];
+}MusicTypeDef;
+
+MusicTypeDef alarm_music[] =
+{
+  {0,"Three Bears"},
+  {1,"Spring Water"},
+  {2,"Bicycle"},
+  {3,"Home town"},
+  {4,"Mom"},
+
+};
+
+/* Base address of the Flash sectors Bank 1 */
+#define ADDR_FLASH_SECTOR_0     ((uint32_t)0x08000000) /* Base @ of Sector 0, 16 Kbytes */
+#define ADDR_FLASH_SECTOR_1     ((uint32_t)0x08004000) /* Base @ of Sector 1, 16 Kbytes */
+#define ADDR_FLASH_SECTOR_2     ((uint32_t)0x08008000) /* Base @ of Sector 2, 16 Kbytes */
+#define ADDR_FLASH_SECTOR_3     ((uint32_t)0x0800C000) /* Base @ of Sector 3, 16 Kbytes */
+#define ADDR_FLASH_SECTOR_4     ((uint32_t)0x08010000) /* Base @ of Sector 4, 64 Kbytes */
+#define ADDR_FLASH_SECTOR_5     ((uint32_t)0x08020000) /* Base @ of Sector 5, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_6     ((uint32_t)0x08040000) /* Base @ of Sector 6, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_7     ((uint32_t)0x08060000) /* Base @ of Sector 7, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_8     ((uint32_t)0x08080000) /* Base @ of Sector 8, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_9     ((uint32_t)0x080A0000) /* Base @ of Sector 9, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_10    ((uint32_t)0x080C0000) /* Base @ of Sector 10, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_11    ((uint32_t)0x080E0000) /* Base @ of Sector 11, 128 Kbytes */
+
+/* Base address of the Flash sectors Bank 2 */
+#define ADDR_FLASH_SECTOR_12     ((uint32_t)0x08100000) /* Base @ of Sector 0, 16 Kbytes */
+#define ADDR_FLASH_SECTOR_13     ((uint32_t)0x08104000) /* Base @ of Sector 1, 16 Kbytes */
+#define ADDR_FLASH_SECTOR_14     ((uint32_t)0x08108000) /* Base @ of Sector 2, 16 Kbytes */
+#define ADDR_FLASH_SECTOR_15     ((uint32_t)0x0810C000) /* Base @ of Sector 3, 16 Kbytes */
+#define ADDR_FLASH_SECTOR_16     ((uint32_t)0x08110000) /* Base @ of Sector 4, 64 Kbytes */
+#define ADDR_FLASH_SECTOR_17     ((uint32_t)0x08120000) /* Base @ of Sector 5, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_18     ((uint32_t)0x08140000) /* Base @ of Sector 6, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_19     ((uint32_t)0x08160000) /* Base @ of Sector 7, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_20     ((uint32_t)0x08180000) /* Base @ of Sector 8, 128 Kbytes  */
+#define ADDR_FLASH_SECTOR_21     ((uint32_t)0x081A0000) /* Base @ of Sector 9, 128 Kbytes  */
+#define ADDR_FLASH_SECTOR_22     ((uint32_t)0x081C0000) /* Base @ of Sector 10, 128 Kbytes */
+#define ADDR_FLASH_SECTOR_23     ((uint32_t)0x081E0000) /* Base @ of Sector 11, 128 Kbytes */
+
+#define MAGIC_NUM 0xdeadbeef
+
+typedef struct {
+  uint32_t magic_num;
+  TimeTypeDef setting_time;
+  TimeTypeDef alarm_time;
+  int8_t alarm_music_num;
+}NVitemTypeDef;
+
+#define nv_items  ((NVitemTypeDef *) ADDR_FLASH_SECTOR_23)
+
+NVitemTypeDef default_nvitem =
+{
+  MAGIC_NUM,
+  {0,0,0},
+  {0,0,0},
+  0
+};
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -139,14 +248,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		if(status == 1){
 			clk = 1;
 			dbChk++;
-		}
-		if (status == 0 && clk == 1){
-			clk = 0;
+		} else{
+			if(clk){
+				if (timeInterval > 200){
+				} else if(timeInterval ){
+					clk = 0;
+					dbChk = 0;
 
-			if(pressedTime < 400){
-				dbChk = 1;
+				}
 			}
-
 		}
 	}
 }
