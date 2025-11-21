@@ -1,0 +1,24 @@
+# STM32CubeIDE / Eclipse Build Output
+Debug/
+Release/
+build/
+bin/
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# Settings specific to local machine (선택 사항)
+.settings/language.settings.xml
+# .settings 폴더 전체를 무시하기도 하지만, 
+# 팀 프로젝트 시 일부 설정 공유를 위해 위 파일 정도만 무시하는 것을 추천합니다.
+
+# Temporary / Metadata
+.metadata/
+.lock
+*.launch
+
+# OS specific
+.DS_Store
+Thumbs.db
