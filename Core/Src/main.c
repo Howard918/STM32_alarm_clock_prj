@@ -21,6 +21,59 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#if 1
+#include <stdio.h>
+#include <stdarg.h>
+// 1. LCD 초기화: 터미널 화면을 싹 지워줍니다.
+void LCD_Init(I2C_HandleTypeDef *pI2cHandle)
+{
+    // ANSI Code: \033[2J (화면 클리어), \033[H (커서 홈으로)
+    printf("\033[2J\033[H");
+    printf("=== LCD SIMULATION MODE ===\r\n");
+    HAL_Delay(1000);
+    printf("\033[2J"); // 다시 지우고 시작
+}
+
+// 2. 백라이트: 시뮬레이션에선 딱히 할 게 없으므로 비워둡니다.
+void LCD_Backlight(uint8_t state)
+{
+    // (Optional) 백라이트 상태를 로그로 남기고 싶다면:
+    // printf("Backlight: %d\r\n", state);
+}
+
+// 3. 커서 이동: LCD 좌표(0,0)를 터미널 좌표(1,1)로 매핑합니다.
+// LCD는 보통 (col, row) 순서로 받지만, ANSI는 (row, col) 순서임에 주의!
+void LCD_SetCursor(uint8_t col, uint8_t row)
+{
+    // ANSI Code: \033[<줄>;<칸>H
+    // 줄(Row)과 칸(Col)은 1부터 시작하므로 +1 해줍니다.
+    // LCD 0번 줄 -> 터미널 2번 줄 (1번 줄은 메뉴바 등으로 남겨두기 위해 +2 해도 됨)
+    printf("\033[%d;%dH", row + 1, col + 1);
+}
+
+// 4. 문자열 출력: 단순히 printf로 전달합니다.
+void LCD_Print(char *str)
+{
+    printf("%s", str);
+}
+
+// 5. 서식 지정 출력 (LCD_Printf): printf의 기능을 그대로 씁니다.
+void LCD_Printf(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args); // vprintf는 printf의 가변 인자 버전
+    va_end(args);
+}
+
+// 6. 화면 지우기
+void LCD_Clear(void)
+{
+    printf("\033[2J");
+}
+
+#else
+#endif
 
 #define UP_KEY  65
 #define DOWN_KEY 66
@@ -57,9 +110,21 @@ struct clock_state{
 	enum CLOCK_MODE mode;
 	enum CLOCK_MANIPULATE key;
 	int music_num;
+	int edit_pos;
 };
 
 struct clock_state current_state;
+
+// 편집 위치 정의
+enum EDIT_POS {
+    POS_AMPM = 0,
+    POS_HOUR,
+    POS_MIN,
+    POS_SEC
+};
+// 블링킹 제어용 변수
+int blink_state = 0; // 0:보임, 1:숨김
+int blink_timer = 0;
 
 typedef struct {
   int8_t hours;
@@ -85,6 +150,7 @@ MusicTypeDef alarm_music[] =
   {4,"Mom"},
 
 };
+
 
 /* Base address of the Flash sectors Bank 1 */
 #define ADDR_FLASH_SECTOR_0     ((uint32_t)0x08000000) /* Base @ of Sector 0, 16 Kbytes */
@@ -190,10 +256,8 @@ int flag;
 int dbChk;
 
 //================ UART / tim Variance ==========================
-volatile int timer_count,second,minute,hour;
+volatile int timer_count;
 volatile int time_flag = 0;
-char  line[2][18], time_str[10];
-void time_display(void);
 uint32_t timeInterval;
 char rcv_byte;
 char uart_buf[30];
@@ -203,21 +267,7 @@ volatile uint16_t g_adc_x_value = 0;
 volatile uint16_t g_adc_y_value = 0;
 
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-  if(htim->Instance==TIM2)
-  {
-	  if((timer_count%100)==0)
-	  {
-		  Time_Increment(&ctime);
-
-		  time_flag = 1;
-
-	  }
-	  timer_count++;
-  }
-}
-
+//================== User Function ========================
 void Time_Increment(TimeTypeDef *time)
 {
     time->seconds++;
@@ -239,21 +289,108 @@ void Time_Increment(TimeTypeDef *time)
         }
     }
 }
+#if 0
+void display_Handler(void)
+{
+	LCD_SetCursor(0, 0);
+
+	switch (current_state.mode)
+	{
+	case NORMAL_STATE:
+		lcd_time_display(&ctime);
+		break;
+
+	case TIME_SETTING:
+		lcd_time_display(&stime); // 설정 중인 시간(stime) 표시
+		break;
+
+	case ALARM_TIME_SETTING:
+		lcd_time_display(&atime);
+		break;
+
+	default:
+		break;
+	}
+}
+#else
+// blink_pos: 깜빡일 위치 (0~3), -1이면 깜빡임 없음
+void lcd_time_display_ex(TimeTypeDef *time, int blink_pos)
+{
+    LCD_SetCursor(0, 1);
+
+    // 임시 변수
+    int h = time->hours;
+    char ampm_str[3] = "AM";
+
+    if(h >= 12) {
+        strcpy(ampm_str, "PM");
+        if (h > 12) h -= 12;
+    }
+    if (h == 0) h = 12; // 0시는 12 AM으로 표시
+
+    // 1. AM/PM 출력 (blink_pos == 0 이고 blink_state == 1 이면 공백 출력)
+    if (blink_pos == POS_AMPM && blink_state == 1) LCD_Print("  ");
+    else LCD_Print(ampm_str);
+
+    LCD_Print(" ");
+
+    // 2. 시(Hour) 출력
+    if (blink_pos == POS_HOUR && blink_state == 1) LCD_Print("  ");
+    else LCD_Printf("%02d", h);
+
+    LCD_Print(":");
+
+    // 3. 분(Minute) 출력
+    if (blink_pos == POS_MIN && blink_state == 1) LCD_Print("  ");
+    else LCD_Printf("%02d", time->minutes);
+
+    LCD_Print(":");
+
+    // 4. 초(Second) 출력
+    if (blink_pos == POS_SEC && blink_state == 1) LCD_Print("  ");
+    else LCD_Printf("%02d", time->seconds);
+}
+
+void display_Handler(void)
+{
+    // Blink 타이머 처리 (500ms 주기로 깜빡임)
+    blink_timer++;
+    if(blink_timer > 5) { // 호출 주기가 100ms라고 가정 (5 * 100ms = 0.5s)
+        blink_state = !blink_state;
+        blink_timer = 0;
+    }
+
+    LCD_SetCursor(0, 0);
+
+    switch (current_state.mode)
+    {
+    case NORMAL_STATE:
+        LCD_Print("H's Clock     ");
+        // 일반 모드에서는 깜빡임 없음 (-1)
+        lcd_time_display_ex(&ctime, -1);
+        break;
+
+    case TIME_SETTING:
+        LCD_Print("Time Setting  ");
+        // 현재 edit_pos 위치를 깜빡이게 함
+        lcd_time_display_ex(&stime, current_state.edit_pos);
+        break;
+
+    case ALARM_TIME_SETTING:
+        LCD_Print("Alarm Setting ");
+        // 알람 설정 시에도 동일하게 커서 사용 가능
+        lcd_time_display_ex(&atime, current_state.edit_pos);
+        break;
+    }
+}
+
+#endif
+
 
 void display(void)
 {
   printf("X : %d\r\n", g_adc_x_value);
   printf("Y : %d\r\n", g_adc_y_value);
-}
-
-void time_setting(void)
-{
-
-}
-
-void key_status(void)
-{
-
 }
 
 void lcd_time_display(TimeTypeDef *time)
@@ -273,6 +410,39 @@ void lcd_time_display(TimeTypeDef *time)
 
 }
 
+
+// 조이스틱 값을 방향키로 변환
+void Joystick_Process(void)
+{
+    // ADC 값 범위: 0 ~ 4095, 중앙값 ~ 2048
+    // Threshold 설정
+    if (g_adc_y_value > 3000) current_state.key = UP;
+    else if (g_adc_y_value < 1000) current_state.key = DOWN;
+    else if (g_adc_x_value > 3000) current_state.key = RIGHT; // 회로에 따라 좌우 반전 확인 필요
+    else if (g_adc_x_value < 1000) current_state.key = LEFT;
+    // 키 입력이 없으면 NO_KEY는 유지하지 않음 (버튼(SEL)이 있을 수 있으므로)
+    // 단, 여기서 SEL 키 처리는 EXTI 콜백에서 하므로 덮어쓰지 않도록 주의
+}
+
+//============= Timer, GPIO, UART, ADC Callback ==================
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  if(htim->Instance==TIM2)
+  {
+	  if((timer_count%100)==0)
+	  {
+		  Time_Increment(&ctime);
+	  }
+
+	  if((timer_count%10)==0)
+	  {
+		  time_flag = 1;
+	  }
+
+	  timer_count++;
+  }
+}
 
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -312,10 +482,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   }
 }
 
-
-//================ JoyStick ADC Part ======================
-
-
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	if(hadc == &hadc1)
@@ -331,6 +497,97 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 	}
 }
 
+//==================== Process State ==========================
+
+void Process_Normal_State(void)
+{
+    // 조이스틱이나 버튼 입력 처리
+    Joystick_Process();
+
+    if (current_state.key == SEL)
+    {
+        // 설정 모드로 진입
+        stime = ctime; // 현재 시간을 복사해서 수정 시작
+        current_state.mode = TIME_SETTING;
+        current_state.key = NO_KEY; // 키 소비
+        LCD_Clear(); // 화면 전환 시 클리어 추천
+    }
+}
+
+void Process_Time_Setting(void)
+{
+    // 조이스틱 입력 처리 (반드시 호출)
+    Joystick_Process();
+
+    // 키 입력이 없으면 종료
+    if (current_state.key == NO_KEY) return;
+
+    switch (current_state.key)
+    {
+    // 1. 좌우 이동 (커서 변경)
+    case RIGHT:
+        current_state.edit_pos++;
+        if (current_state.edit_pos > POS_SEC) current_state.edit_pos = POS_AMPM;
+        break;
+
+    case LEFT:
+        current_state.edit_pos--;
+        if (current_state.edit_pos < POS_AMPM) current_state.edit_pos = POS_SEC;
+        break;
+
+    // 2. 상하 이동 (값 변경)
+    case UP:
+        switch(current_state.edit_pos) {
+            case POS_AMPM: // 12시간 더하면 AM/PM 토글됨
+                stime.hours = (stime.hours + 12) % 24;
+                break;
+            case POS_HOUR:
+                stime.hours++;
+                if(stime.hours >= 24) stime.hours = 0;
+                break;
+            case POS_MIN:
+                stime.minutes++;
+                if(stime.minutes >= 60) stime.minutes = 0;
+                break;
+            case POS_SEC:
+                stime.seconds++;
+                if(stime.seconds >= 60) stime.seconds = 0;
+                break;
+        }
+        break;
+
+    case DOWN:
+        switch(current_state.edit_pos) {
+            case POS_AMPM:
+                stime.hours = (stime.hours + 12) % 24;
+                break;
+            case POS_HOUR:
+                stime.hours--;
+                if(stime.hours < 0) stime.hours = 23;
+                break;
+            case POS_MIN:
+                stime.minutes--;
+                if(stime.minutes < 0) stime.minutes = 59;
+                break;
+            case POS_SEC:
+                stime.seconds--;
+                if(stime.seconds < 0) stime.seconds = 59;
+                break;
+        }
+        break;
+
+    // 3. 설정 완료 (SEL 버튼)
+    case SEL:
+        ctime = stime; // 설정값 적용
+        Save_Settings_To_Flash(); // 저장
+        current_state.mode = NORMAL_STATE;
+        LCD_Clear();
+        break;
+    }
+
+    // 키 처리 후 초기화 (연속 입력 방지용, 혹은 딜레이 필요)
+    current_state.key = NO_KEY;
+}
 
 //===================== printf Description ==============================
 
@@ -389,14 +646,19 @@ int main(void)
   MX_I2C1_Init();
 
   /* USER CODE BEGIN 2 */
+  Load_Settings_From_Flash();
+
   LCD_Init(&hi2c1);
   LCD_Backlight(1);
   LCD_SetCursor(0, 0);
   LCD_Print("H's Clock");
   HAL_TIM_Base_Init(&htim2);
   HAL_TIM_Base_Start_IT(&htim2);
-  // HAL_UART_Receive_IT(&huart3, &rcv_byte, 1);
+  HAL_UART_Receive_IT(&huart3, &rcv_byte, 1);
   HAL_ADC_Start_IT(&hadc1);
+
+  current_state.mode = NORMAL_STATE;
+  current_state.key = NO_KEY;
 
   /* USER CODE END 2 */
 
@@ -405,11 +667,32 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	  if (time_flag == 1){
+	  if (time_flag == 1)
+	  {
 		  time_flag = 0;
-		  display();
-		  lcd_time_display(&ctime);
+		  switch (current_state.mode)
+		  {
+		  case NORMAL_STATE:
+			  Process_Normal_State();
+			  break;
+
+		  case TIME_SETTING:
+			  Process_Time_Setting();
+			  break;
+
+		  case ALARM_TIME_SETTING:
+	//		  Process_Alarm_Setting();
+			  break;
+
+		  case MUSIC_SELECT:
+	//		  Process_Music_Select();
+			  break;
+		  }
+//		  display();
+		  display_Handler();
+
 	  }
+
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -798,6 +1081,79 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+// Flash에 설정값 저장 (반드시 설정을 마친 후 호출)
+void Save_Settings_To_Flash(void)
+{
+    FLASH_EraseInitTypeDef EraseInitStruct;
+    uint32_t SectorError = 0;
+
+    // 1. 데이터 준비
+    NVitemTypeDef data_to_save;
+    data_to_save.magic_num = MAGIC_NUM;
+    data_to_save.setting_time = stime; // 설정된 시간을 저장 (혹은 ctime)
+    data_to_save.alarm_time = atime;
+    data_to_save.alarm_music_num = current_state.music_num;
+
+    // ctime을 저장하고 싶다면 아래 주석 해제 (전원 끊기 직전 시간 저장용)
+    data_to_save.setting_time = ctime;
+
+    HAL_FLASH_Unlock();
+
+    // 2. 섹터 지우기 (Sector 23)
+    EraseInitStruct.TypeErase = FLASH_TYPEERASE_SECTORS;
+    EraseInitStruct.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+    EraseInitStruct.Sector = FLASH_SECTOR_23;
+    EraseInitStruct.NbSectors = 1;
+
+    if (HAL_FLASHEx_Erase(&EraseInitStruct, &SectorError) != HAL_OK)
+    {
+        HAL_FLASH_Lock();
+        return;
+    }
+
+    // 3. 데이터 쓰기
+    uint32_t address = ADDR_FLASH_SECTOR_23;
+    uint32_t *pData = (uint32_t *)&data_to_save;
+    int size = sizeof(NVitemTypeDef) / 4;
+    if (sizeof(NVitemTypeDef) % 4 != 0) size++;
+
+    for (int i = 0; i < size; i++)
+    {
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, address + (i*4), pData[i]) != HAL_OK)
+        {
+             break;
+        }
+    }
+
+    HAL_FLASH_Lock();
+}
+
+// 부팅 시 Flash에서 데이터 불러오기
+void Load_Settings_From_Flash(void)
+{
+    if (nv_items->magic_num == MAGIC_NUM)
+    {
+        // 저장된 데이터가 있음
+        ctime = nv_items->setting_time; // 저장된 시간으로 복구
+        atime = nv_items->alarm_time;
+        current_state.music_num = nv_items->alarm_music_num;
+
+        current_state.mode = NORMAL_STATE;
+    }
+    else
+    {
+        // 초기 데이터 (공장 초기화 상태)
+        ctime.hours = 12; ctime.minutes = 0; ctime.seconds = 0;
+        atime.hours = 6; atime.minutes = 0; atime.seconds = 0;
+        current_state.music_num = 0;
+
+        stime = ctime;
+		current_state.mode = TIME_SETTING;
+		current_state.edit_pos = POS_HOUR;
+    }
+    // 설정용 변수 초기화
+}
 
 /* USER CODE END 4 */
 
