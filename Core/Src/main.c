@@ -225,30 +225,32 @@ typedef struct {
     uint16_t duration_ms;
 } Note;
 
-// Song 1: School Bell
+// Song 1: School Bell (Rhythmically Corrected & Faster)
 const Note school_bell[] = {
-    {NOTE_G4, 500}, {NOTE_G4, 500}, {NOTE_A4, 500}, {NOTE_A4, 500},
-    {NOTE_G4, 500}, {NOTE_G4, 500}, {NOTE_E4, 1000},
-    {NOTE_G4, 500}, {NOTE_G4, 500}, {NOTE_E4, 500}, {NOTE_E4, 500},
-    {NOTE_D4, 1000}, {REST, 0} // 끝 표시
+    {NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_A4, 200}, {NOTE_A4, 200}, {NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_E4, 400}, {REST, 200},
+    {NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_E4, 200}, {NOTE_E4, 200}, {NOTE_D4, 400}, {REST, 200},
+	{NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_A4, 200}, {NOTE_A4, 200}, {NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_E4, 400}, {REST, 200},
+	{NOTE_G4, 200}, {NOTE_E4, 200}, {NOTE_D4, 200}, {NOTE_E4, 200}, {NOTE_C4, 400},
+    {REST, 0} // End of song marker
 };
 
-// Song 2: For Elise
+// Song 2: For Elise (Rhythmically Corrected & Faster)
 const Note for_elise[] = {
-    {NOTE_E5, 200}, {NOTE_DS5, 200}, {NOTE_E5, 200}, {NOTE_DS5, 200}, {NOTE_E5, 200},
-    {NOTE_B4, 200}, {NOTE_D5, 200}, {NOTE_C5, 200}, {NOTE_A4, 600},
-    {REST, 100}, {NOTE_C4, 200}, {NOTE_E4, 200}, {NOTE_A4, 200}, {NOTE_B4, 600},
-    {REST, 100}, {NOTE_E4, 200}, {NOTE_GS5, 200}, {NOTE_B4, 200}, {NOTE_C5, 600},
-    {REST, 0}
+    {NOTE_E5, 150}, {NOTE_DS5, 150}, {NOTE_E5, 150}, {NOTE_DS5, 150}, {NOTE_E5, 150}, {NOTE_B4, 150}, {NOTE_D5, 150}, {NOTE_C5, 150},
+    {NOTE_A4, 300}, {REST, 150}, {NOTE_C4, 150}, {NOTE_E4, 150}, {NOTE_A4, 150}, {NOTE_B4, 300}, {REST, 150},
+    {NOTE_E4, 150}, {NOTE_C5, 150}, {NOTE_B4, 150}, {NOTE_A4, 300},
+    {REST, 0} // End of song marker
 };
 
-// Song 3: Super Mario Bros Intro
+// Song 3: Super Mario Bros Intro (Rhythmically Corrected & Faster)
 const Note super_mario[] = {
-    {NOTE_E5, 150}, {REST, 50}, {NOTE_E5, 150}, {REST, 150}, {NOTE_E5, 150},
-    {REST, 150}, {NOTE_C5, 150}, {NOTE_E5, 300},
-    {NOTE_G5, 300}, {REST, 300}, {NOTE_G4, 300}, {REST, 300},
-    {NOTE_C5, 300}, {REST, 150}, {NOTE_G4, 300}, {REST, 150}, {NOTE_E4, 300},
-    {REST, 0}
+    {NOTE_E5, 120}, {NOTE_E5, 120}, {REST, 120}, {NOTE_E5, 120}, {REST, 120}, {NOTE_C5, 120}, {NOTE_E5, 240},
+    {NOTE_G5, 240}, {REST, 240}, {NOTE_G4, 240}, {REST, 240},
+    {NOTE_C5, 240}, {NOTE_G4, 240}, {NOTE_E4, 240},
+    {NOTE_A4, 120}, {NOTE_B4, 120}, {NOTE_A4, 120}, {NOTE_A4, 120},
+    {NOTE_G4, 160}, {NOTE_E5, 160}, {NOTE_G5, 160}, {NOTE_A5, 240}, {NOTE_F5, 120}, {NOTE_G5, 120},
+    {REST, 120}, {NOTE_E5, 120}, {NOTE_C5, 120}, {NOTE_D5, 120}, {NOTE_B4, 240},
+    {REST, 0} // End of song marker
 };
 
 // Array of song pointers
@@ -259,7 +261,9 @@ const Note* songs[] = {
 };
 
 // Buzzer control functions (templates)
+#define BUZZER_TIMER_CLK 1000000UL // Using 1MHz clock after prescaler
 // TIM_HandleTypeDef htim3; // This is now declared in main.h via CubeMX
+
 // Call this to start playing a note
 void Buzzer_PlayNote(uint16_t frequency)
 {
@@ -267,12 +271,13 @@ void Buzzer_PlayNote(uint16_t frequency)
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0); // Off
         return;
     }
-    // Calculate timer period for the desired frequency
-    uint32_t period = (HAL_RCC_GetPCLK1Freq() * 2) / frequency;
+    // Calculate timer period for the desired frequency, based on 1MHz clock
+    uint32_t period = BUZZER_TIMER_CLK / frequency;
+    if (period > 65535) period = 65535; // Clamp to max 16-bit value
 
     // Calculate compare value based on volume (0-10)
-    // We'll scale the duty cycle from 0% to 50% (max volume)
-    uint32_t compare_value = (period * current_state.volume) / 20; // (period / 2) * (volume / 10)
+    // We'll scale the duty cycle from 0% to 5% (max volume is now quieter)
+    uint32_t compare_value = (period * current_state.volume) / 200; // (period / 20) * (volume / 10)
 
     __HAL_TIM_SET_AUTORELOAD(&htim3, period);
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, compare_value);
@@ -1394,29 +1399,27 @@ static void MX_TIM2_Init(void)
   */
 static void MX_TIM3_Init(void)
 {
-
   /* USER CODE BEGIN TIM3_Init 0 */
 
   /* USER CODE END TIM3_Init 0 */
 
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM3_Init 1 */
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 0;
+  htim3.Init.Prescaler = 83;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 840;
+  htim3.Init.Period = 1000;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
   }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1426,9 +1429,18 @@ static void MX_TIM3_Init(void)
   {
     Error_Handler();
   }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN TIM3_Init 2 */
 
   /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
 
 }
 
