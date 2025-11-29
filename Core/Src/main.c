@@ -27,7 +27,8 @@ enum CLOCK_MODE{
 	NORMAL_STATE,
 	TIME_SETTING,
 	ALARM_TIME_SETTING,
-	MUSIC_SELECT
+	MUSIC_SELECT,
+	ALARM_TRIGGERED_STATE
 };
 
 enum CLOCK_MANIPULATE{
@@ -47,6 +48,8 @@ struct clock_state{
 	int music_num;
 	int edit_pos;
 	int alarm_enabled;
+	int song_note_index;
+	uint32_t note_end_time;
 };
 
 struct clock_state current_state;
@@ -161,6 +164,7 @@ ADC_HandleTypeDef hadc2;
 I2C_HandleTypeDef hi2c1;
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart3;
 
@@ -178,10 +182,12 @@ static void MX_TIM2_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_ADC2_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_TIM3_Init(void); // Placeholder for Buzzer Timer Init
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 void Process_Music_Select(void);
 void Save_And_Display_Message(void);
+void Process_Alarm_Triggered(void);
+void Process_Alarm_Playback(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -248,32 +254,31 @@ const Note* songs[] = {
 };
 
 // Buzzer control functions (templates)
-TIM_HandleTypeDef htim3; // Assuming TIM3 will be used for buzzer PWM
-
+// TIM_HandleTypeDef htim3; // This is now declared in main.h via CubeMX
 // Call this to start playing a note
 void Buzzer_PlayNote(uint16_t frequency)
 {
     if (frequency == 0) {
-        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0); // Stop PWM for rest
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0); // Stop PWM for rest
         return;
     }
     // Calculate timer period for the desired frequency
     // This assumes the APB1 Timer Clock is the source for TIM3
     uint32_t period = (HAL_RCC_GetPCLK1Freq() * 2) / frequency;
     __HAL_TIM_SET_AUTORELOAD(&htim3, period);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, period / 2); // 50% duty cycle
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, period / 2); // 50% duty cycle
 }
 
 // Call this to stop the buzzer
 void Buzzer_Stop(void)
 {
-    HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_2);
 }
 
 // Call this to start the buzzer PWM
 void Buzzer_Start(void)
 {
-    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 }
 
 //================ UART / tim Variance ==========================
@@ -422,6 +427,17 @@ void display_Handler(void)
 		LCD_SetCursor(0,1);
 		LCD_Printf("> %-14s", alarm_music[current_state.music_num].music_title);
 		break;
+    case ALARM_TRIGGERED_STATE:
+		if (blink_state) {
+			LCD_SetCursor(0, 0);
+			LCD_Print("   Alarm!!!     ");
+		} else {
+			LCD_SetCursor(0, 0);
+			LCD_Print("                ");
+		}
+		// Also show the current time
+		lcd_time_display_ex(&ctime, -1);
+		break;
     }
 }
 
@@ -529,6 +545,19 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	  {
 		  Time_Increment(&ctime);
 		  timer_count = 0;
+
+          // Check for alarm condition
+          if (current_state.mode == NORMAL_STATE && current_state.alarm_enabled)
+          {
+              if (ctime.hours == atime.hours && ctime.minutes == atime.minutes && ctime.seconds == atime.seconds)
+              {
+                  current_state.mode = ALARM_TRIGGERED_STATE;
+                  // Start playing the music from the beginning
+                  current_state.song_note_index = 0;
+                  current_state.note_end_time = HAL_GetTick();
+                  Buzzer_Start();
+              }
+          }
 	  }
   }
 }
@@ -860,6 +889,46 @@ void Process_Music_Select(void)
     current_state.key = NO_KEY;
 }
 
+void Process_Alarm_Triggered(void)
+{
+    // Any key press stops the alarm
+    if (current_state.key != NO_KEY)
+    {
+        Buzzer_Stop(); // Stop the sound
+        current_state.mode = NORMAL_STATE; // Go back to normal
+        current_state.key = NO_KEY; // Consume the key
+        LCD_Clear();
+    }
+}
+
+void Process_Alarm_Playback(void)
+{
+    uint32_t now = HAL_GetTick();
+
+    // Time to play the next note?
+    if (now >= current_state.note_end_time)
+    {
+        const Note* current_song = songs[current_state.music_num];
+        Note current_note = current_song[current_state.song_note_index];
+
+        // Play the note
+        Buzzer_PlayNote(current_note.frequency);
+
+        // Set the end time for this note
+        current_state.note_end_time = now + current_note.duration_ms;
+
+        // Move to the next note
+        current_state.song_note_index++;
+
+        // End of song? Check for the {REST, 0} marker which indicates the end.
+        if (current_song[current_state.song_note_index].duration_ms == 0 && current_song[current_state.song_note_index].frequency == REST)
+        {
+            // Loop back to the beginning to repeat the song
+            current_state.song_note_index = 0;
+        }
+    }
+}
+
 void Save_And_Display_Message(void)
 {
 	// Show "Saving..." message first
@@ -932,8 +1001,7 @@ int main(void)
   MX_ADC1_Init();
   MX_ADC2_Init();
   MX_I2C1_Init();
-  MX_TIM3_Init(); // Initialize Buzzer Timer
-
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   Load_Settings_From_Flash();
 
@@ -963,6 +1031,12 @@ int main(void)
 	  {
 		  g_task_flag_10ms = 0;
 
+		  // 1. First, process the current state's periodic tasks
+		  if (current_state.mode == ALARM_TRIGGERED_STATE)
+		  {
+			  Process_Alarm_Playback();
+		  }
+
 		  // 2. Process physical inputs
 		  Process_Button_Events();
 		  Process_Joystick_With_Repeat();
@@ -983,6 +1057,9 @@ int main(void)
 					   break;
 				   case MUSIC_SELECT:
 					  Process_Music_Select();
+					   break;
+				   case ALARM_TRIGGERED_STATE:
+					  Process_Alarm_Triggered();
 					   break;
 			   }
 			   // An action was taken based on input, so update the display immediately.
@@ -1254,6 +1331,51 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 840;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+
+}
+
+/**
   * @brief USART3 Initialization Function
   * @param None
   * @retval None
@@ -1391,26 +1513,6 @@ static void MX_GPIO_Init(void)
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
-}
-
-/**
-  * @brief TIM3 Initialization Function (Placeholder for Buzzer)
-  * @param None
-  * @retval None
-  * @note  Please configure TIM3 in CubeMX for PWM output on a chosen channel.
-  */
-static void MX_TIM3_Init(void)
-{
-	/* USER CODE BEGIN TIM3_Init 0 */
-
-	/* USER CODE END TIM3_Init 0 */
-
-	// Example: This is where you would put the TIM3 PWM configuration code
-	// generated by CubeMX. For now, it is empty.
-
-	/* USER CODE BEGIN TIM3_Init 2 */
-
-	/* USER CODE END TIM3_Init 2 */
 }
 
 /* USER CODE BEGIN 4 */
