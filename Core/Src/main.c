@@ -21,74 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#if 1
-#include <stdio.h>
-#include <stdarg.h>
-// 1. LCD 초기화: 터미널 화면을 싹 지워줍니다.
-void LCD_Init(I2C_HandleTypeDef *pI2cHandle)
-{
-    // ANSI Code: \033[2J (화면 클리어), \033[H (커서 홈으로)
-    printf("\033[2J\033[H");
-    printf("=== LCD SIMULATION MODE ===\r\n");
-    HAL_Delay(1000);
-    printf("\033[2J"); // 다시 지우고 시작
-}
 
-// 2. 백라이트: 시뮬레이션에선 딱히 할 게 없으므로 비워둡니다.
-void LCD_Backlight(uint8_t state)
-{
-    // (Optional) 백라이트 상태를 로그로 남기고 싶다면:
-    // printf("Backlight: %d\r\n", state);
-}
-
-// 3. 커서 이동: LCD 좌표(0,0)를 터미널 좌표(1,1)로 매핑합니다.
-// LCD는 보통 (col, row) 순서로 받지만, ANSI는 (row, col) 순서임에 주의!
-void LCD_SetCursor(uint8_t col, uint8_t row)
-{
-    // ANSI Code: \033[<줄>;<칸>H
-    // 줄(Row)과 칸(Col)은 1부터 시작하므로 +1 해줍니다.
-    // LCD 0번 줄 -> 터미널 2번 줄 (1번 줄은 메뉴바 등으로 남겨두기 위해 +2 해도 됨)
-    printf("\033[%d;%dH", row + 1, col + 1);
-}
-
-// 4. 문자열 출력: 단순히 printf로 전달합니다.
-void LCD_Print(char *str)
-{
-    printf("%s", str);
-}
-
-// 5. 서식 지정 출력 (LCD_Printf): printf의 기능을 그대로 씁니다.
-void LCD_Printf(const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    vprintf(fmt, args); // vprintf는 printf의 가변 인자 버전
-    va_end(args);
-}
-
-// 6. 화면 지우기
-void LCD_Clear(void)
-{
-    printf("\033[2J");
-}
-
-#else
-#endif
-
-#define UP_KEY  65
-#define DOWN_KEY 66
-#define RIGHT_KEY 67
-#define LEFT_KEY  68
-#define SEL_KEY  13
-
-#define LONG_CLICK_MIN 20
-#define LONG_CLICK_MAX 50
-#define LONG_CLICK_COUNT 30
-
-#define DOUBLE_CLICK_MIN 100
-#define DOUBLE_CLICK_MAX 200
-
-#define NORMAL_CLICK_MIN 500
 
 enum CLOCK_MODE{
 	NORMAL_STATE,
@@ -103,28 +36,35 @@ enum CLOCK_MANIPULATE{
 	DOWN,
 	RIGHT,
 	LEFT,
-	SEL
+	SEL,
+	DBL_SEL,
+	LONG_SEL
 };
 
 struct clock_state{
 	enum CLOCK_MODE mode;
-	enum CLOCK_MANIPULATE key;
+	volatile enum CLOCK_MANIPULATE key;
 	int music_num;
 	int edit_pos;
+	int alarm_enabled;
 };
 
 struct clock_state current_state;
+
+uint32_t last_key_time = 0;
 
 // 편집 위치 정의
 enum EDIT_POS {
     POS_AMPM = 0,
     POS_HOUR,
     POS_MIN,
-    POS_SEC
+    POS_SEC,
+	POS_ALARM_ONOFF
 };
 // 블링킹 제어용 변수
 int blink_state = 0; // 0:보임, 1:숨김
 int blink_timer = 0;
+int blink_force = 0;
 
 typedef struct {
   int8_t hours;
@@ -143,12 +83,9 @@ typedef struct {
 
 MusicTypeDef alarm_music[] =
 {
-  {0,"Three Bears"},
-  {1,"Spring Water"},
-  {2,"Bicycle"},
-  {3,"Home town"},
-  {4,"Mom"},
-
+  {0,"School Bell"},
+  {1,"For Elise"},
+  {2,"Super Mario"},
 };
 
 
@@ -187,6 +124,7 @@ typedef struct {
   TimeTypeDef setting_time;
   TimeTypeDef alarm_time;
   int8_t alarm_music_num;
+  int8_t alarm_enabled;
 }NVitemTypeDef;
 
 #define nv_items  ((NVitemTypeDef *) ADDR_FLASH_SECTOR_23)
@@ -196,6 +134,7 @@ NVitemTypeDef default_nvitem =
   MAGIC_NUM,
   {0,0,0},
   {0,0,0},
+  0,
   0
 };
 /* USER CODE END Includes */
@@ -226,6 +165,8 @@ TIM_HandleTypeDef htim2;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
+#define LONG_PRESS_MS 3000
+#define DBL_CLICK_GAP_MS 220
 
 /* USER CODE END PV */
 
@@ -237,28 +178,108 @@ static void MX_TIM2_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_ADC2_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_TIM3_Init(void); // Placeholder for Buzzer Timer Init
 /* USER CODE BEGIN PFP */
-
+void Process_Music_Select(void);
+void Save_And_Display_Message(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-//=============== GPIO Variance ===============
-int status;
-uint32_t lastTime;
-uint32_t currentTime;
-uint32_t pressedTime;
-uint32_t unpressedTime;
-uint32_t dbClickTime;
-char event;
-int clk;
-int flag;
-int dbChk;
+// 음계 주파수 (Hz)
+#define NOTE_C4  262
+#define NOTE_D4  294
+#define NOTE_E4  330
+#define NOTE_F4  349
+#define NOTE_G4  392
+#define NOTE_A4  440
+#define NOTE_B4  494
+#define NOTE_C5  523
+#define NOTE_CS5 554 // C#5
+#define NOTE_D5  587
+#define NOTE_DS5 622 // D#5
+#define NOTE_E5  659
+#define NOTE_F5  698
+#define NOTE_G5  784
+#define NOTE_GS5 831 // G#5
+#define NOTE_A5  880
+#define NOTE_B5  988
+#define NOTE_C6  1047
+#define NOTE_E6  1319
+#define REST      0   // 쉼표
+
+// Note structure for melodies
+typedef struct {
+    uint16_t frequency;
+    uint16_t duration_ms;
+} Note;
+
+// Song 1: School Bell
+const Note school_bell[] = {
+    {NOTE_G4, 500}, {NOTE_G4, 500}, {NOTE_A4, 500}, {NOTE_A4, 500},
+    {NOTE_G4, 500}, {NOTE_G4, 500}, {NOTE_E4, 1000},
+    {NOTE_G4, 500}, {NOTE_G4, 500}, {NOTE_E4, 500}, {NOTE_E4, 500},
+    {NOTE_D4, 1000}, {REST, 0} // 끝 표시
+};
+
+// Song 2: For Elise
+const Note for_elise[] = {
+    {NOTE_E5, 200}, {NOTE_DS5, 200}, {NOTE_E5, 200}, {NOTE_DS5, 200}, {NOTE_E5, 200},
+    {NOTE_B4, 200}, {NOTE_D5, 200}, {NOTE_C5, 200}, {NOTE_A4, 600},
+    {REST, 100}, {NOTE_C4, 200}, {NOTE_E4, 200}, {NOTE_A4, 200}, {NOTE_B4, 600},
+    {REST, 100}, {NOTE_E4, 200}, {NOTE_GS5, 200}, {NOTE_B4, 200}, {NOTE_C5, 600},
+    {REST, 0}
+};
+
+// Song 3: Super Mario Bros Intro
+const Note super_mario[] = {
+    {NOTE_E5, 150}, {REST, 50}, {NOTE_E5, 150}, {REST, 150}, {NOTE_E5, 150},
+    {REST, 150}, {NOTE_C5, 150}, {NOTE_E5, 300},
+    {NOTE_G5, 300}, {REST, 300}, {NOTE_G4, 300}, {REST, 300},
+    {NOTE_C5, 300}, {REST, 150}, {NOTE_G4, 300}, {REST, 150}, {NOTE_E4, 300},
+    {REST, 0}
+};
+
+// Array of song pointers
+const Note* songs[] = {
+    school_bell,
+    for_elise,
+    super_mario
+};
+
+// Buzzer control functions (templates)
+TIM_HandleTypeDef htim3; // Assuming TIM3 will be used for buzzer PWM
+
+// Call this to start playing a note
+void Buzzer_PlayNote(uint16_t frequency)
+{
+    if (frequency == 0) {
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0); // Stop PWM for rest
+        return;
+    }
+    // Calculate timer period for the desired frequency
+    // This assumes the APB1 Timer Clock is the source for TIM3
+    uint32_t period = (HAL_RCC_GetPCLK1Freq() * 2) / frequency;
+    __HAL_TIM_SET_AUTORELOAD(&htim3, period);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, period / 2); // 50% duty cycle
+}
+
+// Call this to stop the buzzer
+void Buzzer_Stop(void)
+{
+    HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_1);
+}
+
+// Call this to start the buzzer PWM
+void Buzzer_Start(void)
+{
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+}
 
 //================ UART / tim Variance ==========================
-volatile int timer_count;
-volatile int time_flag = 0;
-uint32_t timeInterval;
+volatile int timer_count = 0;
+volatile int g_task_flag_10ms = 0;
+volatile int g_task_flag_100ms = 0;
 char rcv_byte;
 char uart_buf[30];
 
@@ -266,6 +287,10 @@ char uart_buf[30];
 volatile uint16_t g_adc_x_value = 0;
 volatile uint16_t g_adc_y_value = 0;
 
+static volatile uint32_t g_button_press_time = 0;      // Timestamp of the last button press
+static volatile uint32_t g_button_last_release_time = 0; // Timestamp of the last button release
+static volatile int g_button_click_count = 0;          // Number of clicks detected
+static volatile int g_new_release_event = 0;           // Flag for a new button release event
 
 //================== User Function ========================
 void Time_Increment(TimeTypeDef *time)
@@ -289,30 +314,7 @@ void Time_Increment(TimeTypeDef *time)
         }
     }
 }
-#if 0
-void display_Handler(void)
-{
-	LCD_SetCursor(0, 0);
 
-	switch (current_state.mode)
-	{
-	case NORMAL_STATE:
-		lcd_time_display(&ctime);
-		break;
-
-	case TIME_SETTING:
-		lcd_time_display(&stime); // 설정 중인 시간(stime) 표시
-		break;
-
-	case ALARM_TIME_SETTING:
-		lcd_time_display(&atime);
-		break;
-
-	default:
-		break;
-	}
-}
-#else
 // blink_pos: 깜빡일 위치 (0~3), -1이면 깜빡임 없음
 void lcd_time_display_ex(TimeTypeDef *time, int blink_pos)
 {
@@ -349,16 +351,50 @@ void lcd_time_display_ex(TimeTypeDef *time, int blink_pos)
     // 4. 초(Second) 출력
     if (blink_pos == POS_SEC && blink_state == 1) LCD_Print("  ");
     else LCD_Printf("%02d", time->seconds);
+
+	if (current_state.mode == NORMAL_STATE) {
+		if (current_state.alarm_enabled) {
+			LCD_Printf(" AL%d", current_state.music_num + 1);
+		} else {
+			LCD_Print("   ");
+		}
+	} else if (current_state.mode == ALARM_TIME_SETTING) {
+		LCD_SetCursor(12, 1);
+		if (blink_pos == POS_ALARM_ONOFF && blink_state == 1) {
+			LCD_Print("   ");
+		} else {
+			if (current_state.alarm_enabled) {
+				LCD_Print(" ON");
+			} else {
+				LCD_Print("OFF");
+			}
+		}
+	}
+
 }
 
 void display_Handler(void)
 {
-    // Blink 타이머 처리 (500ms 주기로 깜빡임)
-    blink_timer++;
-    if(blink_timer > 5) { // 호출 주기가 100ms라고 가정 (5 * 100ms = 0.5s)
-        blink_state = !blink_state;
-        blink_timer = 0;
+    #define BLINK_SUPPRESS_MS 500 // Suppress blinking for 500ms after key activity
+
+    // Suppress blinking for a short period after joystick activity in setting modes
+    if (current_state.mode == TIME_SETTING || current_state.mode == ALARM_TIME_SETTING) {
+        if (HAL_GetTick() - last_key_time < BLINK_SUPPRESS_MS) {
+            blink_state = 0; // Keep display on
+            blink_force = 1; // Prevent blink timer from running
+        }
     }
+
+    // Blink timer processing
+    if(blink_force == 0){
+		blink_timer++;
+		if(blink_timer > 2) { // Assuming 100ms cycle, this is 300ms.
+			blink_state = !blink_state;
+			blink_timer = 0;
+		}
+    }
+
+    blink_force = 0; // Reset force flag every cycle
 
     LCD_SetCursor(0, 0);
 
@@ -381,16 +417,12 @@ void display_Handler(void)
         // 알람 설정 시에도 동일하게 커서 사용 가능
         lcd_time_display_ex(&atime, current_state.edit_pos);
         break;
+    case MUSIC_SELECT:
+		LCD_Print("Select Music:");
+		LCD_SetCursor(0,1);
+		LCD_Printf("> %-14s", alarm_music[current_state.music_num].music_title);
+		break;
     }
-}
-
-#endif
-
-
-void display(void)
-{
-  printf("X : %d\r\n", g_adc_x_value);
-  printf("Y : %d\r\n", g_adc_y_value);
 }
 
 void lcd_time_display(TimeTypeDef *time)
@@ -411,17 +443,69 @@ void lcd_time_display(TimeTypeDef *time)
 }
 
 
-// 조이스틱 값을 방향키로 변환
-void Joystick_Process(void)
+// 조이스틱 값을 방향키로 변환 (with auto-repeat)
+typedef struct {
+    enum CLOCK_MANIPULATE last_key;
+    uint32_t first_press_time;
+    uint32_t last_repeat_time;
+    int is_repeating;
+} JoystickRepeat_t;
+
+static JoystickRepeat_t joy_repeat_state = {NO_KEY, 0, 0, 0};
+
+void Process_Joystick_With_Repeat(void)
 {
-    // ADC 값 범위: 0 ~ 4095, 중앙값 ~ 2048
-    // Threshold 설정
-    if (g_adc_y_value > 3000) current_state.key = UP;
-    else if (g_adc_y_value < 1000) current_state.key = DOWN;
-    else if (g_adc_x_value > 3000) current_state.key = RIGHT; // 회로에 따라 좌우 반전 확인 필요
-    else if (g_adc_x_value < 1000) current_state.key = LEFT;
-    // 키 입력이 없으면 NO_KEY는 유지하지 않음 (버튼(SEL)이 있을 수 있으므로)
-    // 단, 여기서 SEL 키 처리는 EXTI 콜백에서 하므로 덮어쓰지 않도록 주의
+    #define REPEAT_DELAY_MS 500  // Time before repeat starts
+    #define REPEAT_RATE_MS  150  // Repeat rate after it starts
+
+    enum CLOCK_MANIPULATE current_key = NO_KEY;
+    uint32_t now = HAL_GetTick();
+
+    // If a key from another source (like a button) is being processed, do nothing.
+    // However, we still check for joystick release to reset the state.
+    if (current_state.key != NO_KEY) {
+        if (g_adc_y_value < 2730 && g_adc_y_value > 1365 && g_adc_x_value < 2730 && g_adc_x_value > 1365) {
+            joy_repeat_state.last_key = NO_KEY;
+            joy_repeat_state.is_repeating = 0;
+        }
+        return;
+    }
+
+    // 1. Detect current hardware key state
+    if (g_adc_y_value > 2730) current_key = UP;
+    else if (g_adc_y_value < 1365) current_key = DOWN;
+    else if (g_adc_x_value > 2730) current_key = RIGHT;
+    else if (g_adc_x_value < 1365) current_key = LEFT;
+
+    // 2. Process state changes and repeat logic
+    if (current_key != NO_KEY) {
+        if (joy_repeat_state.last_key != current_key) {
+            // New key pressed: fire once immediately
+            current_state.key = current_key;
+            joy_repeat_state.last_key = current_key;
+            joy_repeat_state.first_press_time = now;
+            joy_repeat_state.last_repeat_time = now;
+            joy_repeat_state.is_repeating = 0;
+        } else {
+            // Key is being held
+            if (!joy_repeat_state.is_repeating) {
+                if (now - joy_repeat_state.first_press_time > REPEAT_DELAY_MS) {
+                    joy_repeat_state.is_repeating = 1;
+                    joy_repeat_state.last_repeat_time = now;
+                    current_state.key = current_key; // Start repeating
+                }
+            }
+            else { // Already repeating
+                if (now - joy_repeat_state.last_repeat_time > REPEAT_RATE_MS) {
+                    joy_repeat_state.last_repeat_time = now;
+                    current_state.key = current_key; // Fire repeat event
+                }
+            }
+        }
+    } else { // No key is physically pressed: reset state
+        joy_repeat_state.last_key = NO_KEY;
+        joy_repeat_state.is_repeating = 0;
+    }
 }
 
 //============= Timer, GPIO, UART, ADC Callback ==================
@@ -430,39 +514,44 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if(htim->Instance==TIM2)
   {
-	  if((timer_count%100)==0)
+	  // 10ms tick
+	  g_task_flag_10ms = 1;
+	  timer_count++;
+
+	  // 100ms tick
+	  if ((timer_count % 10) == 0)
+	  {
+		  g_task_flag_100ms = 1;
+	  }
+
+	  // 1-second tick
+	  if (timer_count >= 100)
 	  {
 		  Time_Increment(&ctime);
+		  timer_count = 0;
 	  }
-
-	  if((timer_count%10)==0)
-	  {
-		  time_flag = 1;
-	  }
-
-	  timer_count++;
   }
 }
 
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	if (GPIO_Pin == GPIO_PIN_13){
-		status = HAL_GPIO_ReadPin(GPIOC, GPIO_Pin);
-		currentTime = HAL_GetTick();
-		timeInterval = currentTime - lastTime;
-		lastTime = currentTime;
-		if(status == 1){
-			clk = 1;
-			dbChk++;
-		} else{
-			if(clk){
-				if (timeInterval > 200){
-				} else if(timeInterval ){
-					clk = 0;
-					dbChk = 0;
-
-				}
+	if (GPIO_Pin == USER_Btn_Pin)
+	{
+		// This ISR now simply flags a release event after a press.
+		if (HAL_GPIO_ReadPin(USER_Btn_GPIO_Port, USER_Btn_Pin) == GPIO_PIN_SET)
+		{
+			// Button is pressed down. Record the initial time if not already pressed.
+			if (g_button_press_time == 0) {
+				g_button_press_time = HAL_GetTick();
+			}
+		}
+		else
+		{
+			// Button is released. Only flag a release if a press was recorded.
+			if (g_button_press_time > 0) {
+				g_button_last_release_time = HAL_GetTick();
+				g_new_release_event = 1; // Signal that a full press-release cycle occurred.
 			}
 		}
 	}
@@ -474,9 +563,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   {
 	    /* Transmit one byte with 100 ms timeout */
 //	HAL_UART_Transmit(&huart3, &rcv_byte, 1, 100);
-	currentTime = HAL_GetTick();
-	timeInterval = currentTime - lastTime;
-	lastTime = currentTime;
 	HAL_UART_Receive_IT(&huart3, &rcv_byte, 1);
 	/* Receive one byte in interrupt mode */
   }
@@ -497,28 +583,92 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 	}
 }
 
+
 //==================== Process State ==========================
+
+// Hybrid Button Processing - Shared Variables & Processing Function
+// These are shared between the GPIO ISR and the periodic processing task.
+// 'volatile' ensures the compiler always reads them from memory, as they can change unexpectedly.
+
+/**
+  * @brief Processes time-based button events (long press, double click timeouts).
+  * @note  This function is designed to be called periodically by a fast timer (e.g., 10ms).
+  *        It checks the state variables set by the HAL_GPIO_EXTI_Callback.
+  */
+void Process_Button_Events(void)
+{
+    uint32_t now = HAL_GetTick();
+
+    // If an event is already pending, wait for it to be processed.
+    if (current_state.key != NO_KEY) {
+        return;
+    }
+
+    // --- Time-based Logic ---
+
+    // Part 1: Real-time long press detection (while button is held down)
+    if (g_button_press_time > 0 && !g_new_release_event)
+    {
+        if (now - g_button_press_time >= LONG_PRESS_MS)
+        {
+            printf("LC\r\n");
+            current_state.key = LONG_SEL;
+            g_button_press_time = 0;  // Consume the event to prevent re-triggering.
+            g_button_click_count = 0; // A long press is not a click.
+        }
+    }
+
+    // Part 2: Process a completed press-and-release cycle for short clicks.
+    if (g_new_release_event)
+    {
+        // Check if the press was already handled as a long press above.
+        if (g_button_press_time > 0)
+        {
+            // If press_time is still valid, it means it was not a long press.
+            g_button_click_count++;
+        }
+        // Consume the event by resetting the state variables.
+        g_button_press_time = 0;
+        g_new_release_event = 0;
+    }
+
+    // Part 3: Process counted clicks after the double-click timeout window.
+    if (g_button_click_count > 0 && (now - g_button_last_release_time > DBL_CLICK_GAP_MS))
+    {
+        if (g_button_click_count == 1) {
+        	printf("C\r\n");
+            current_state.key = SEL; // It was a single click.
+        } else { // 2 or more clicks
+        	printf("DC\r\n");
+            current_state.key = DBL_SEL; // It was a double click.
+        }
+        g_button_click_count = 0; // Consume the click events.
+    }
+}
+
 
 void Process_Normal_State(void)
 {
-    // 조이스틱이나 버튼 입력 처리
-    Joystick_Process();
+    // Input is now handled in the main loop.
 
-    if (current_state.key == SEL)
+    if (current_state.key == LONG_SEL)
     {
-        // 설정 모드로 진입
-        stime = ctime; // 현재 시간을 복사해서 수정 시작
-        current_state.mode = TIME_SETTING;
-        current_state.key = NO_KEY; // 키 소비
-        LCD_Clear(); // 화면 전환 시 클리어 추천
+		current_state.mode = ALARM_TIME_SETTING;
+		current_state.edit_pos = POS_HOUR; // Start editing at hour
+		LCD_Clear();
     }
+    else if (current_state.key == DBL_SEL)
+    {
+    	current_state.mode = MUSIC_SELECT;
+    	LCD_Clear();
+    }
+
+	// Consume the key, whether it was handled or not, to prevent getting stuck.
+	current_state.key = NO_KEY;
 }
 
 void Process_Time_Setting(void)
 {
-    // 조이스틱 입력 처리 (반드시 호출)
-    Joystick_Process();
-
     // 키 입력이 없으면 종료
     if (current_state.key == NO_KEY) return;
 
@@ -528,15 +678,18 @@ void Process_Time_Setting(void)
     case RIGHT:
         current_state.edit_pos++;
         if (current_state.edit_pos > POS_SEC) current_state.edit_pos = POS_AMPM;
+        blink_timer = 0; blink_state = 1; // Reset blink to hide, to start blinking immediately
         break;
 
     case LEFT:
         current_state.edit_pos--;
         if (current_state.edit_pos < POS_AMPM) current_state.edit_pos = POS_SEC;
+        blink_timer = 0; blink_state = 1; // Reset blink to hide, to start blinking immediately
         break;
 
     // 2. 상하 이동 (값 변경)
     case UP:
+        last_key_time = HAL_GetTick(); // Suppress blinking
         switch(current_state.edit_pos) {
             case POS_AMPM: // 12시간 더하면 AM/PM 토글됨
                 stime.hours = (stime.hours + 12) % 24;
@@ -557,6 +710,7 @@ void Process_Time_Setting(void)
         break;
 
     case DOWN:
+        last_key_time = HAL_GetTick(); // Suppress blinking
         switch(current_state.edit_pos) {
             case POS_AMPM:
                 stime.hours = (stime.hours + 12) % 24;
@@ -578,16 +732,150 @@ void Process_Time_Setting(void)
 
     // 3. 설정 완료 (SEL 버튼)
     case SEL:
+    case DBL_SEL:
+    case LONG_SEL:
         ctime = stime; // 설정값 적용
-        Save_Settings_To_Flash(); // 저장
-        current_state.mode = NORMAL_STATE;
-        LCD_Clear();
+        Save_And_Display_Message();
         break;
     }
 
     // 키 처리 후 초기화 (연속 입력 방지용, 혹은 딜레이 필요)
     current_state.key = NO_KEY;
 }
+
+void Process_Alarm_Setting(void)
+{
+    // 키 입력이 없으면 종료
+    if (current_state.key == NO_KEY) return;
+
+    switch (current_state.key)
+    {
+    // 1. 좌우 이동 (커서 변경)
+    case RIGHT:
+        current_state.edit_pos++;
+        if (current_state.edit_pos > POS_ALARM_ONOFF) current_state.edit_pos = POS_AMPM;
+        blink_timer = 0; blink_state = 1; // Reset blink to hide, to start blinking immediately
+        break;
+
+    case LEFT:
+        current_state.edit_pos--;
+        if (current_state.edit_pos < POS_AMPM) current_state.edit_pos = POS_ALARM_ONOFF;
+        blink_timer = 0; blink_state = 1; // Reset blink to hide, to start blinking immediately
+        break;
+
+    // 2. 상하 이동 (값 변경)
+    case UP:
+        last_key_time = HAL_GetTick(); // Suppress blinking
+        if(current_state.edit_pos == POS_ALARM_ONOFF) {
+			current_state.alarm_enabled = !current_state.alarm_enabled;
+		}
+		else
+		{
+			switch(current_state.edit_pos) {
+				case POS_AMPM: // 12시간 더하면 AM/PM 토글됨
+					atime.hours = (atime.hours + 12) % 24;
+					break;
+				case POS_HOUR:
+					atime.hours++;
+					if(atime.hours >= 24) atime.hours = 0;
+					break;
+				case POS_MIN:
+					atime.minutes++;
+					if(atime.minutes >= 60) atime.minutes = 0;
+					break;
+				case POS_SEC:
+					atime.seconds++;
+					if(atime.seconds >= 60) atime.seconds = 0;
+					break;
+			}
+		}
+        break;
+
+    case DOWN:
+        last_key_time = HAL_GetTick(); // Suppress blinking
+		if(current_state.edit_pos == POS_ALARM_ONOFF) {
+			current_state.alarm_enabled = !current_state.alarm_enabled;
+		}
+		else
+		{
+			switch(current_state.edit_pos) {
+				case POS_AMPM:
+					atime.hours = (atime.hours + 12) % 24;
+					break;
+				case POS_HOUR:
+					atime.hours--;
+					if(atime.hours < 0) atime.hours = 23;
+					break;
+				case POS_MIN:
+					atime.minutes--;
+					if(atime.minutes < 0) atime.minutes = 59;
+					break;
+				case POS_SEC:
+					atime.seconds--;
+					if(atime.seconds < 0) atime.seconds = 59;
+					break;
+			}
+		}
+        break;
+
+    // 3. 설정 완료 (SEL 버튼)
+    case SEL:
+    case DBL_SEL:
+    case LONG_SEL:
+    	Save_And_Display_Message();
+        break;
+    }
+
+    // 키 처리 후 초기화 (연속 입력 방지용, 혹은 딜레이 필요)
+    current_state.key = NO_KEY;
+}
+
+void Process_Music_Select(void)
+{
+    if (current_state.key == NO_KEY) return;
+
+    switch (current_state.key)
+    {
+        case UP:
+            current_state.music_num++;
+            if (current_state.music_num >= 3) // 3 songs total
+            {
+                current_state.music_num = 0;
+            }
+            break;
+        case DOWN:
+            current_state.music_num--;
+            if (current_state.music_num < 0)
+            {
+                current_state.music_num = 2; // Loop back to the last song
+            }
+            break;
+        case SEL:
+        case DBL_SEL:
+        case LONG_SEL:
+        	Save_And_Display_Message();
+            break;
+    }
+    // 키 처리 후 초기화 (연속 입력 방지용, 혹은 딜레이 필요)
+    current_state.key = NO_KEY;
+}
+
+void Save_And_Display_Message(void)
+{
+	// Show "Saving..." message first
+	LCD_Clear();
+	LCD_SetCursor(0, 0);
+	LCD_Print("Saving...");
+
+	// Perform the blocking save operation.
+	// The message will be visible on the LCD while the MCU is busy here.
+	Save_Settings_To_Flash();
+
+	// Done, go back to normal state
+	LCD_Clear();
+	current_state.mode = NORMAL_STATE;
+}
+
 
 //===================== printf Description ==============================
 
@@ -644,6 +932,7 @@ int main(void)
   MX_ADC1_Init();
   MX_ADC2_Init();
   MX_I2C1_Init();
+  MX_TIM3_Init(); // Initialize Buzzer Timer
 
   /* USER CODE BEGIN 2 */
   Load_Settings_From_Flash();
@@ -657,7 +946,6 @@ int main(void)
   HAL_UART_Receive_IT(&huart3, &rcv_byte, 1);
   HAL_ADC_Start_IT(&hadc1);
 
-  current_state.mode = NORMAL_STATE;
   current_state.key = NO_KEY;
 
   /* USER CODE END 2 */
@@ -667,30 +955,55 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	  if (time_flag == 1)
+	  int needs_display_update = 0;
+
+	  // --- 10ms Task ---
+	  // High-frequency tasks like input processing
+	  if (g_task_flag_10ms)
 	  {
-		  time_flag = 0;
-		  switch (current_state.mode)
+		  g_task_flag_10ms = 0;
+
+		  // 2. Process physical inputs
+		  Process_Button_Events();
+		  Process_Joystick_With_Repeat();
+
+		  // 3. If a key event was generated, process it based on the current state
+		  if (current_state.key != NO_KEY)
 		  {
-		  case NORMAL_STATE:
-			  Process_Normal_State();
-			  break;
-
-		  case TIME_SETTING:
-			  Process_Time_Setting();
-			  break;
-
-		  case ALARM_TIME_SETTING:
-	//		  Process_Alarm_Setting();
-			  break;
-
-		  case MUSIC_SELECT:
-	//		  Process_Music_Select();
-			  break;
+			   switch (current_state.mode)
+			   {
+				   case NORMAL_STATE:
+					   Process_Normal_State();
+					   break;
+				   case TIME_SETTING:
+					   Process_Time_Setting();
+					   break;
+				   case ALARM_TIME_SETTING:
+					  Process_Alarm_Setting();
+					   break;
+				   case MUSIC_SELECT:
+					  Process_Music_Select();
+					   break;
+			   }
+			   // An action was taken based on input, so update the display immediately.
+			   needs_display_update = 1;
 		  }
-//		  display();
-		  display_Handler();
+	  }
 
+	  // --- 100ms Task ---
+	  // Low-frequency tasks like regular display updates
+	  if (g_task_flag_100ms)
+	  {
+		  g_task_flag_100ms = 0;
+		  needs_display_update = 1; // Schedule a regular display update.
+	  }
+
+	  // --- Display Update ---
+	  // Consolidate all display updates here.
+	  if (needs_display_update)
+	  {
+		  display_Handler();
+		  needs_display_update = 0; // Consume the flag
 	  }
 
     /* USER CODE BEGIN 3 */
@@ -1080,6 +1393,26 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
+/**
+  * @brief TIM3 Initialization Function (Placeholder for Buzzer)
+  * @param None
+  * @retval None
+  * @note  Please configure TIM3 in CubeMX for PWM output on a chosen channel.
+  */
+static void MX_TIM3_Init(void)
+{
+	/* USER CODE BEGIN TIM3_Init 0 */
+
+	/* USER CODE END TIM3_Init 0 */
+
+	// Example: This is where you would put the TIM3 PWM configuration code
+	// generated by CubeMX. For now, it is empty.
+
+	/* USER CODE BEGIN TIM3_Init 2 */
+
+	/* USER CODE END TIM3_Init 2 */
+}
+
 /* USER CODE BEGIN 4 */
 
 // Flash에 설정값 저장 (반드시 설정을 마친 후 호출)
@@ -1091,12 +1424,16 @@ void Save_Settings_To_Flash(void)
     // 1. 데이터 준비
     NVitemTypeDef data_to_save;
     data_to_save.magic_num = MAGIC_NUM;
-    data_to_save.setting_time = stime; // 설정된 시간을 저장 (혹은 ctime)
+    // Process_Time_Setting에서 ctime = stime으로 설정했으므로,
+    // 현재 설정된 시간이 ctime에 들어있음.
+    data_to_save.setting_time = ctime;
     data_to_save.alarm_time = atime;
     data_to_save.alarm_music_num = current_state.music_num;
+	data_to_save.alarm_enabled = current_state.alarm_enabled;
 
-    // ctime을 저장하고 싶다면 아래 주석 해제 (전원 끊기 직전 시간 저장용)
-    data_to_save.setting_time = ctime;
+
+	// 인터럽트 비활성화
+	__disable_irq();
 
     HAL_FLASH_Unlock();
 
@@ -1109,6 +1446,7 @@ void Save_Settings_To_Flash(void)
     if (HAL_FLASHEx_Erase(&EraseInitStruct, &SectorError) != HAL_OK)
     {
         HAL_FLASH_Lock();
+		__enable_irq(); // 인터럽트 다시 활성화
         return;
     }
 
@@ -1127,6 +1465,7 @@ void Save_Settings_To_Flash(void)
     }
 
     HAL_FLASH_Lock();
+	__enable_irq(); // 인터럽트 다시 활성화
 }
 
 // 부팅 시 Flash에서 데이터 불러오기
@@ -1138,6 +1477,7 @@ void Load_Settings_From_Flash(void)
         ctime = nv_items->setting_time; // 저장된 시간으로 복구
         atime = nv_items->alarm_time;
         current_state.music_num = nv_items->alarm_music_num;
+		current_state.alarm_enabled = nv_items->alarm_enabled;
 
         current_state.mode = NORMAL_STATE;
     }
@@ -1147,6 +1487,7 @@ void Load_Settings_From_Flash(void)
         ctime.hours = 12; ctime.minutes = 0; ctime.seconds = 0;
         atime.hours = 6; atime.minutes = 0; atime.seconds = 0;
         current_state.music_num = 0;
+		current_state.alarm_enabled = 0;
 
         stime = ctime;
 		current_state.mode = TIME_SETTING;
