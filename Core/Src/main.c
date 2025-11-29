@@ -50,6 +50,8 @@ struct clock_state{
 	int alarm_enabled;
 	int song_note_index;
 	uint32_t note_end_time;
+	int volume;
+	uint32_t display_timeout_timer;
 };
 
 struct clock_state current_state;
@@ -128,6 +130,7 @@ typedef struct {
   TimeTypeDef alarm_time;
   int8_t alarm_music_num;
   int8_t alarm_enabled;
+  int8_t volume;
 }NVitemTypeDef;
 
 #define nv_items  ((NVitemTypeDef *) ADDR_FLASH_SECTOR_23)
@@ -138,7 +141,8 @@ NVitemTypeDef default_nvitem =
   {0,0,0},
   {0,0,0},
   0,
-  0
+  0,
+  5
 };
 /* USER CODE END Includes */
 
@@ -188,6 +192,7 @@ void Process_Music_Select(void);
 void Save_And_Display_Message(void);
 void Process_Alarm_Triggered(void);
 void Process_Alarm_Playback(void);
+void Adjust_Volume(enum CLOCK_MANIPULATE direction);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -258,15 +263,19 @@ const Note* songs[] = {
 // Call this to start playing a note
 void Buzzer_PlayNote(uint16_t frequency)
 {
-    if (frequency == 0) {
-        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0); // Stop PWM for rest
+    if (frequency == 0 || current_state.volume == 0) {
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0); // Off
         return;
     }
     // Calculate timer period for the desired frequency
-    // This assumes the APB1 Timer Clock is the source for TIM3
     uint32_t period = (HAL_RCC_GetPCLK1Freq() * 2) / frequency;
+
+    // Calculate compare value based on volume (0-10)
+    // We'll scale the duty cycle from 0% to 50% (max volume)
+    uint32_t compare_value = (period * current_state.volume) / 20; // (period / 2) * (volume / 10)
+
     __HAL_TIM_SET_AUTORELOAD(&htim3, period);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, period / 2); // 50% duty cycle
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, compare_value);
 }
 
 // Call this to stop the buzzer
@@ -406,9 +415,33 @@ void display_Handler(void)
     switch (current_state.mode)
     {
     case NORMAL_STATE:
-        LCD_Print("H's Clock     ");
-        // 일반 모드에서는 깜빡임 없음 (-1)
-        lcd_time_display_ex(&ctime, -1);
+    	#define VOLUME_DISPLAY_TIMEOUT 2000 // 2 seconds
+		// If the volume has been adjusted recently, show the volume bar instead of the clock title
+		if (current_state.display_timeout_timer > 0 && (HAL_GetTick() - current_state.display_timeout_timer < VOLUME_DISPLAY_TIMEOUT))
+		{
+			// Show volume bar
+			char vol_bar[17];
+			int i;
+			for(i = 0; i < 10; i++)
+			{
+				if(i < current_state.volume) vol_bar[i] = 0b11111111; // Solid block character
+				else vol_bar[i] = '-';
+			}
+			vol_bar[10] = '\0';
+
+			LCD_SetCursor(0, 0);
+			LCD_Printf("Volume: %-10s", ""); // Clear line
+			LCD_SetCursor(0, 1);
+			LCD_Printf("[%s] %2d", vol_bar, current_state.volume);
+		}
+		else
+		{
+			// Show normal clock
+			current_state.display_timeout_timer = 0; // Ensure it's off
+			LCD_Print("H's Clock     ");
+			// 일반 모드에서는 깜빡임 없음 (-1)
+			lcd_time_display_ex(&ctime, -1);
+		}
         break;
 
     case TIME_SETTING:
@@ -889,6 +922,22 @@ void Process_Music_Select(void)
     current_state.key = NO_KEY;
 }
 
+void Adjust_Volume(enum CLOCK_MANIPULATE direction)
+{
+    if (direction == UP)
+    {
+        current_state.volume++;
+        if (current_state.volume > 10) current_state.volume = 10;
+    }
+    else // DOWN
+    {
+        current_state.volume--;
+        if (current_state.volume < 0) current_state.volume = 0;
+    }
+    // Set the display timeout timer to now, to show the volume bar
+    current_state.display_timeout_timer = HAL_GetTick();
+}
+
 void Process_Alarm_Triggered(void)
 {
     // Any key press stops the alarm
@@ -1040,6 +1089,14 @@ int main(void)
 		  // 2. Process physical inputs
 		  Process_Button_Events();
 		  Process_Joystick_With_Repeat();
+
+		  // Handle low-priority joystick inputs for NORMAL_STATE
+		  if (current_state.mode == NORMAL_STATE && (current_state.key == UP || current_state.key == DOWN))
+		  {
+			  Adjust_Volume(current_state.key);
+			  current_state.key = NO_KEY; // Consume the key
+			  needs_display_update = 1;
+		  }
 
 		  // 3. If a key event was generated, process it based on the current state
 		  if (current_state.key != NO_KEY)
@@ -1532,6 +1589,7 @@ void Save_Settings_To_Flash(void)
     data_to_save.alarm_time = atime;
     data_to_save.alarm_music_num = current_state.music_num;
 	data_to_save.alarm_enabled = current_state.alarm_enabled;
+	data_to_save.volume = current_state.volume;
 
 
 	// 인터럽트 비활성화
@@ -1580,6 +1638,7 @@ void Load_Settings_From_Flash(void)
         atime = nv_items->alarm_time;
         current_state.music_num = nv_items->alarm_music_num;
 		current_state.alarm_enabled = nv_items->alarm_enabled;
+		current_state.volume = nv_items->volume;
 
         current_state.mode = NORMAL_STATE;
     }
@@ -1590,14 +1649,15 @@ void Load_Settings_From_Flash(void)
         atime.hours = 6; atime.minutes = 0; atime.seconds = 0;
         current_state.music_num = 0;
 		current_state.alarm_enabled = 0;
+		current_state.volume = 5; // Default volume
 
         stime = ctime;
 		current_state.mode = TIME_SETTING;
 		current_state.edit_pos = POS_HOUR;
     }
     // 설정용 변수 초기화
+    current_state.display_timeout_timer = 0;
 }
-
 /* USER CODE END 4 */
 
 /**
