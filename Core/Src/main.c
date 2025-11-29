@@ -203,6 +203,7 @@ void Adjust_Volume(enum CLOCK_MANIPULATE direction);
 #define NOTE_E4  330
 #define NOTE_F4  349
 #define NOTE_G4  392
+#define NOTE_GS4 415 // G#4 / Ab4
 #define NOTE_A4  440
 #define NOTE_B4  494
 #define NOTE_C5  523
@@ -225,33 +226,39 @@ typedef struct {
     uint16_t duration_ms;
 } Note;
 
-// Song 1: School Bell (Rhythmically Corrected & Faster)
+// Song 1: School Bell (Rhythmically Corrected & Staccato)
 const Note school_bell[] = {
-    {NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_A4, 200}, {NOTE_A4, 200}, {NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_E4, 400}, {REST, 200},
-    {NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_E4, 200}, {NOTE_E4, 200}, {NOTE_D4, 400}, {REST, 200},
-	{NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_A4, 200}, {NOTE_A4, 200}, {NOTE_G4, 200}, {NOTE_G4, 200}, {NOTE_E4, 400}, {REST, 200},
-	{NOTE_G4, 200}, {NOTE_E4, 200}, {NOTE_D4, 200}, {NOTE_E4, 200}, {NOTE_C4, 400},
+    {NOTE_G4, 200}, {REST, 2}, {NOTE_G4, 200}, {REST, 2}, {NOTE_A4, 200}, {REST, 2}, {NOTE_A4, 200}, {REST, 2},
+    {NOTE_G4, 200}, {REST, 2}, {NOTE_G4, 200}, {REST, 2}, {NOTE_E4, 400}, {REST, 300},
+    {NOTE_G4, 200}, {REST, 2}, {NOTE_G4, 200}, {REST, 2}, {NOTE_E4, 200}, {REST, 2}, {NOTE_E4, 200}, {REST, 2},
+    {NOTE_D4, 400}, {REST, 300},
+	{NOTE_G4, 200}, {REST, 2}, {NOTE_G4, 200}, {REST, 2}, {NOTE_A4, 200}, {REST, 2}, {NOTE_A4, 200}, {REST, 2},
+	{NOTE_G4, 200}, {REST, 2}, {NOTE_G4, 200}, {REST, 2}, {NOTE_E4, 400}, {REST, 300},
+	{NOTE_G4, 200}, {REST, 2}, {NOTE_E4, 200}, {REST, 2}, {NOTE_D4, 200}, {REST, 2}, {NOTE_E4, 200}, {REST, 2},
+	{NOTE_C4, 400}, {REST, 500},
     {REST, 0} // End of song marker
 };
 
-// Song 2: For Elise (Rhythmically Corrected & Faster)
+// Song 2: For Elise (Rhythmically Corrected & Staccato)
 const Note for_elise[] = {
-    {NOTE_E5, 150}, {NOTE_DS5, 150}, {NOTE_E5, 150}, {NOTE_DS5, 150}, {NOTE_E5, 150}, {NOTE_B4, 150}, {NOTE_D5, 150}, {NOTE_C5, 150},
-    {NOTE_A4, 300}, {REST, 150}, {NOTE_C4, 150}, {NOTE_E4, 150}, {NOTE_A4, 150}, {NOTE_B4, 300}, {REST, 150},
-    {NOTE_E4, 150}, {NOTE_C5, 150}, {NOTE_B4, 150}, {NOTE_A4, 300},
+    {NOTE_E5, 150}, {REST, 2}, {NOTE_DS5, 150}, {REST, 2}, {NOTE_E5, 150}, {REST, 2}, {NOTE_DS5, 150}, {REST, 2}, {NOTE_E5, 150}, {REST, 2}, {NOTE_B4, 150}, {REST, 2}, {NOTE_D5, 150}, {REST, 2}, {NOTE_C5, 150}, {REST, 2},
+    {NOTE_A4, 300}, {REST, 150}, {NOTE_C4, 150}, {REST, 2}, {NOTE_E4, 150}, {REST, 2}, {NOTE_A4, 150}, {REST, 2}, {NOTE_B4, 300}, {REST, 150},
+    {NOTE_E4, 150}, {REST, 2}, {NOTE_C5, 150}, {REST, 2}, {NOTE_B4, 150}, {REST, 2}, {NOTE_A4, 300},
     {REST, 0} // End of song marker
 };
 
-// Song 3: Super Mario Bros Intro (Rhythmically Corrected & Faster)
+// Song 3: Super Mario Bros Intro (Rhythmically Corrected & Staccato)
 const Note super_mario[] = {
-    {NOTE_E5, 120}, {NOTE_E5, 120}, {REST, 120}, {NOTE_E5, 120}, {REST, 120}, {NOTE_C5, 120}, {NOTE_E5, 240},
+    {NOTE_E5, 120}, {REST, 2}, {NOTE_E5, 120}, {REST, 120}, {NOTE_E5, 120}, {REST, 120}, {NOTE_C5, 120}, {REST, 2}, {NOTE_E5, 240}, {REST, 2},
     {NOTE_G5, 240}, {REST, 240}, {NOTE_G4, 240}, {REST, 240},
-    {NOTE_C5, 240}, {NOTE_G4, 240}, {NOTE_E4, 240},
-    {NOTE_A4, 120}, {NOTE_B4, 120}, {NOTE_A4, 120}, {NOTE_A4, 120},
-    {NOTE_G4, 160}, {NOTE_E5, 160}, {NOTE_G5, 160}, {NOTE_A5, 240}, {NOTE_F5, 120}, {NOTE_G5, 120},
-    {REST, 120}, {NOTE_E5, 120}, {NOTE_C5, 120}, {NOTE_D5, 120}, {NOTE_B4, 240},
+    {NOTE_C5, 240}, {REST, 2}, {NOTE_G4, 240}, {REST, 2}, {NOTE_E4, 240}, {REST, 2},
+    {NOTE_A4, 120}, {REST, 2}, {NOTE_B4, 120}, {REST, 2}, {NOTE_GS4, 120}, {REST, 2}, {NOTE_A4, 120}, {REST, 2},
+    {NOTE_G4, 160}, {REST, 2}, {NOTE_E5, 160}, {REST, 2}, {NOTE_G5, 160}, {REST, 2}, {NOTE_A5, 240}, {REST, 2}, {NOTE_F5, 120}, {REST, 2}, {NOTE_G5, 120},
+    {REST, 120}, {NOTE_E5, 120}, {REST, 2}, {NOTE_C5, 120}, {REST, 2}, {NOTE_D5, 120}, {REST, 2}, {NOTE_B4, 240},
     {REST, 0} // End of song marker
 };
+
+
 
 // Array of song pointers
 const Note* songs[] = {
@@ -1399,6 +1406,7 @@ static void MX_TIM2_Init(void)
   */
 static void MX_TIM3_Init(void)
 {
+
   /* USER CODE BEGIN TIM3_Init 0 */
 
   /* USER CODE END TIM3_Init 0 */
@@ -1415,10 +1423,6 @@ static void MX_TIM3_Init(void)
   htim3.Init.Period = 1000;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
-  {
-    Error_Handler();
-  }
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
@@ -1430,13 +1434,8 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
+  sConfigOC.Pulse = htim3.Init.Period / 2; // Set initial pulse to 50% for audibility
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN TIM3_Init 2 */
 
   /* USER CODE END TIM3_Init 2 */
