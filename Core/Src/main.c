@@ -90,7 +90,7 @@ MusicTypeDef alarm_music[] =
 {
   {0,"School Bell"},
   {1,"For Elise"},
-  {2,"Super Mario"},
+  {2,"Ode to Joy"},
 };
 
 
@@ -248,13 +248,19 @@ const Note for_elise[] = {
 };
 
 // Song 3: Super Mario Bros Intro (Rhythmically Corrected & Staccato)
-const Note super_mario[] = {
-    {NOTE_E5, 120}, {REST, 2}, {NOTE_E5, 120}, {REST, 120}, {NOTE_E5, 120}, {REST, 120}, {NOTE_C5, 120}, {REST, 2}, {NOTE_E5, 240}, {REST, 2},
-    {NOTE_G5, 240}, {REST, 240}, {NOTE_G4, 240}, {REST, 240},
-    {NOTE_C5, 240}, {REST, 2}, {NOTE_G4, 240}, {REST, 2}, {NOTE_E4, 240}, {REST, 2},
-    {NOTE_A4, 120}, {REST, 2}, {NOTE_B4, 120}, {REST, 2}, {NOTE_GS4, 120}, {REST, 2}, {NOTE_A4, 120}, {REST, 2},
-    {NOTE_G4, 160}, {REST, 2}, {NOTE_E5, 160}, {REST, 2}, {NOTE_G5, 160}, {REST, 2}, {NOTE_A5, 240}, {REST, 2}, {NOTE_F5, 120}, {REST, 2}, {NOTE_G5, 120},
-    {REST, 120}, {NOTE_E5, 120}, {REST, 2}, {NOTE_C5, 120}, {REST, 2}, {NOTE_D5, 120}, {REST, 2}, {NOTE_B4, 240},
+const Note ode_to_joy[] = {
+    // 미 미 파 솔 / 솔 파 미 레 / 도 도 레 미 / 미(점) 레 레
+    {NOTE_E4, 250}, {REST, 10}, {NOTE_E4, 250}, {REST, 10}, {NOTE_F4, 250}, {REST, 10}, {NOTE_G4, 250}, {REST, 10},
+    {NOTE_G4, 250}, {REST, 10}, {NOTE_F4, 250}, {REST, 10}, {NOTE_E4, 250}, {REST, 10}, {NOTE_D4, 250}, {REST, 10},
+    {NOTE_C4, 250}, {REST, 10}, {NOTE_C4, 250}, {REST, 10}, {NOTE_D4, 250}, {REST, 10}, {NOTE_E4, 250}, {REST, 10},
+    {NOTE_E4, 375}, {REST, 10}, {NOTE_D4, 125}, {REST, 10}, {NOTE_D4, 500}, {REST, 250},
+
+    // 미 미 파 솔 / 솔 파 미 레 / 도 도 레 미 / 레(점) 도 도
+    {NOTE_E4, 250}, {REST, 10}, {NOTE_E4, 250}, {REST, 10}, {NOTE_F4, 250}, {REST, 10}, {NOTE_G4, 250}, {REST, 10},
+    {NOTE_G4, 250}, {REST, 10}, {NOTE_F4, 250}, {REST, 10}, {NOTE_E4, 250}, {REST, 10}, {NOTE_D4, 250}, {REST, 10},
+    {NOTE_C4, 250}, {REST, 10}, {NOTE_C4, 250}, {REST, 10}, {NOTE_D4, 250}, {REST, 10}, {NOTE_E4, 250}, {REST, 10},
+    {NOTE_D4, 375}, {REST, 10}, {NOTE_C4, 125}, {REST, 10}, {NOTE_C4, 500}, {REST, 500},
+
     {REST, 0} // End of song marker
 };
 
@@ -264,7 +270,7 @@ const Note super_mario[] = {
 const Note* songs[] = {
     school_bell,
     for_elise,
-    super_mario
+    ode_to_joy
 };
 
 // Buzzer control functions (templates)
@@ -304,7 +310,7 @@ void Buzzer_Start(void)
 
 //================ UART / tim Variance ==========================
 volatile int timer_count = 0;
-volatile int g_task_flag_10ms = 0;
+volatile int g_task_flag_1ms = 0;
 volatile int g_task_flag_100ms = 0;
 char rcv_byte;
 char uart_buf[30];
@@ -399,6 +405,24 @@ void lcd_time_display_ex(TimeTypeDef *time, int blink_pos)
 
 }
 
+void display_Click_Indicator(void)
+{
+    char bar[4] = "   ";
+
+    // Long press animation (while button is physically pressed)
+    if (g_button_press_time > 0) {
+        uint32_t press_duration = HAL_GetTick() - g_button_press_time;
+        // Animation fills from the right over 2.5 seconds
+        if (press_duration > 833) bar[2] = 0b11111111;
+        if (press_duration > 1666) bar[1] = 0b11111111;
+        if (press_duration >= 2500) bar[0] = 0b11111111;
+    }
+    // If button is not pressed, the "   " will clear the area.
+
+    LCD_SetCursor(13, 0); // Draw at columns 13, 14, 15
+    LCD_Print(bar);
+}
+
 void display_Handler(void)
 {
     #define BLINK_SUPPRESS_MS 500 // Suppress blinking for 500ms after key activity
@@ -484,6 +508,7 @@ void display_Handler(void)
 		lcd_time_display_ex(&ctime, -1);
 		break;
     }
+	display_Click_Indicator();
 }
 
 void lcd_time_display(TimeTypeDef *time)
@@ -575,18 +600,18 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if(htim->Instance==TIM2)
   {
-	  // 10ms tick
-	  g_task_flag_10ms = 1;
+	  // 1ms tick
+	  g_task_flag_1ms = 1;
 	  timer_count++;
 
 	  // 100ms tick
-	  if ((timer_count % 10) == 0)
+	  if ((timer_count % 100) == 0) // Now 100 counts for 100ms
 	  {
 		  g_task_flag_100ms = 1;
 	  }
 
 	  // 1-second tick
-	  if (timer_count >= 100)
+	  if (timer_count >= 1000) // Now 1000 counts for 1s
 	  {
 		  Time_Increment(&ctime);
 		  timer_count = 0;
@@ -953,7 +978,7 @@ void Adjust_Volume(enum CLOCK_MANIPULATE direction)
 void Process_Alarm_Triggered(void)
 {
     // Any key press stops the alarm
-    if (current_state.key != NO_KEY)
+    if (current_state.key == SEL)
     {
         Buzzer_Stop(); // Stop the sound
         current_state.mode = NORMAL_STATE; // Go back to normal
@@ -1086,11 +1111,11 @@ int main(void)
     /* USER CODE END WHILE */
 	  int needs_display_update = 0;
 
-	  // --- 10ms Task ---
+	  // --- 1ms Task ---
 	  // High-frequency tasks like input processing
-	  if (g_task_flag_10ms)
+	  if (g_task_flag_1ms)
 	  {
-		  g_task_flag_10ms = 0;
+		  g_task_flag_1ms = 0;
 
 		  // 1. First, process the current state's periodic tasks
 		  if (current_state.mode == ALARM_TRIGGERED_STATE)
@@ -1373,9 +1398,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 1000;
+  htim2.Init.Prescaler = 83; // For 1ms tick (84MHz / (83+1) = 1MHz counter clock)
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 840;
+  htim2.Init.Period = 999;  // For 1ms tick (1MHz / (999+1) = 1kHz interrupt)
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
